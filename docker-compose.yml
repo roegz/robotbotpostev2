@@ -1,0 +1,18 @@
+# Optionnel : PostgreSQL local pour tester le mode production.
+#   docker compose up -d
+#   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/robotbotposte npm start
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: robotbotposte
+    ports:
+      - "5432:5432"
+    volumes:
+      - robotbotposte-db:/var/lib/postgresql/data
+
+volumes:
+  robotbotposte-db:

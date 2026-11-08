@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#05060d" />
+    <title>robotbotposte — le réseau qui s’efface en 12 h</title>
+    <meta
+      name="description"
+      content="robotbotposte : posts, vidéos en scroll, amis et messages privés. Tout disparaît 12 h après sa publication."
+    />
+    <meta property="og:title" content="robotbotposte" />
+    <meta
+      property="og:description"
+      content="Le réseau social qui s’efface. Posts, vidéos et messages disparaissent après 12 h."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="boot"><span class="spinner"></span><p>Chargement…</p></div>
+    </div>
+    <div id="modal-root"></div>
+    <div id="toast-root" aria-live="polite" aria-atomic="false"></div>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

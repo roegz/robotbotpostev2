@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: robotbotposte
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: POST_TTL_HOURS
+        value: "12"
+      # Renseigne cette variable dans le dashboard Render avec une URL
+      # PostgreSQL (Neon, Supabase, Render Postgres...). Si elle reste vide,
+      # l'app démarre quand même avec SQLite (données effacées à chaque déploiement).
+      - key: DATABASE_URL
+        sync: false
