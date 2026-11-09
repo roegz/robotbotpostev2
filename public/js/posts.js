@@ -16,6 +16,8 @@ import {
   viewHead,
 } from './ui.js';
 import { icon } from './icons.js';
+import { quickSocialActions } from './relations.js';
+import { openVideoRecorder } from './recorder.js';
 
 /* ------------------------------------------------------------------ */
 /* Médias                                                              */
@@ -173,7 +175,8 @@ export function postCard(postRow, { detail = false } = {}) {
             'span',
             { class: 'expiry', dataset: { expires: shown.expires_at } },
             `⏳ ${remaining(shown.expires_at)}`
-          )
+          ),
+          quickSocialActions(shown.author, { className: 'post-quick' })
         )
       )
     )
@@ -260,12 +263,29 @@ function actionsEl(postRow, target, card, { detail = false } = {}) {
     h('span', { class: 'action-count' }, formatCount(target.counts.reposts))
   );
 
+  const soundBtn =
+    target.media?.type === 'video'
+      ? h(
+          'button',
+          {
+            class: 'post-action',
+            type: 'button',
+            title: 'Filmer une vidéo avec ce son',
+            'aria-label': 'Utiliser ce son',
+            onclick: () => recordWithSound(target),
+          },
+          icon('music', 19),
+          h('span', { class: 'action-count' }, 'Son')
+        )
+      : null;
+
   return h(
     'div',
     { class: 'post-actions' },
     likeBtn,
     commentBtn,
     repostBtn,
+    soundBtn,
     h('div', { class: 'spacer' }),
     postRow.author.id === me.id && !isPureRepostCard(postRow)
       ? h(
@@ -350,6 +370,14 @@ function openRepostMenu(target) {
   );
 }
 
+function recordWithSound(postRow) {
+  if (!postRow?.media?.url) return;
+  openVideoRecorder({
+    sound: { url: postRow.media.url, author: postRow.author },
+    onDone: (media) => openComposer({ initialMedia: media }),
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Composeur                                                          */
 /* ------------------------------------------------------------------ */
@@ -372,7 +400,7 @@ function quotePreview(quotePost) {
   );
 }
 
-export function openComposer({ quotePost = null } = {}) {
+export function openComposer({ quotePost = null, initialMedia = null } = {}) {
   const max = state.config.max_post_length;
   const textarea = h('textarea', {
     class: 'composer-text',
@@ -384,7 +412,7 @@ export function openComposer({ quotePost = null } = {}) {
   const preview = h('div', { class: 'composer-preview' });
   const fileInput = h('input', { type: 'file', accept: 'image/*,video/*', hidden: true });
 
-  let media = null;
+  let media = initialMedia ? { ...initialMedia } : null;
   let uploading = false;
 
   const submitBtn = h(
@@ -398,6 +426,62 @@ export function openComposer({ quotePost = null } = {}) {
     counter.textContent = `${textarea.value.length}/${max}`;
     submitBtn.disabled = uploading || (!textarea.value.trim() && !media && !quotePost);
   };
+
+  function renderPreview() {
+    if (!media) {
+      preview.replaceChildren();
+      return;
+    }
+
+    const node =
+      media.type === 'video'
+        ? h('video', {
+            class: 'composer-media',
+            src: media.url,
+            controls: true,
+            playsInline: true,
+            preload: 'metadata',
+          })
+        : h('img', { class: 'composer-media', src: media.url, alt: '' });
+
+    const soundChip =
+      media.type === 'video' && media.soundAuthor
+        ? h(
+            'span',
+            { class: 'composer-sound' },
+            icon('music', 14),
+            ` Son de @${media.soundAuthor.username}`
+          )
+        : null;
+
+    preview.replaceChildren(
+      h(
+        'div',
+        { class: 'composer-media-wrap' },
+        node,
+        soundChip,
+        h(
+          'button',
+          {
+            class: 'media-remove',
+            type: 'button',
+            'aria-label': 'Retirer le média',
+            onclick: () => {
+              setMedia(null);
+              fileInput.value = '';
+            },
+          },
+          icon('close', 16)
+        )
+      )
+    );
+  }
+
+  function setMedia(next) {
+    media = next ? { ...next } : null;
+    renderPreview();
+    sync();
+  }
 
   textarea.addEventListener('input', sync);
 
@@ -422,41 +506,7 @@ export function openComposer({ quotePost = null } = {}) {
       const result = await uploadFile(file, (ratio) => {
         bar.style.width = `${Math.max(2, Math.round(ratio * 100))}%`;
       });
-      media = { url: result.url, type: result.type };
-
-      const node =
-        media.type === 'video'
-          ? h('video', {
-              class: 'composer-media',
-              src: media.url,
-              controls: true,
-              playsInline: true,
-              preload: 'metadata',
-            })
-          : h('img', { class: 'composer-media', src: media.url, alt: '' });
-
-      preview.replaceChildren(
-        h(
-          'div',
-          { class: 'composer-media-wrap' },
-          node,
-          h(
-            'button',
-            {
-              class: 'media-remove',
-              type: 'button',
-              'aria-label': 'Retirer le média',
-              onclick: () => {
-                media = null;
-                preview.replaceChildren();
-                fileInput.value = '';
-                sync();
-              },
-            },
-            icon('close', 16)
-          )
-        )
-      );
+      setMedia({ url: result.url, type: result.type });
     } catch (error) {
       toast(error.message, 'error');
       preview.replaceChildren();
@@ -466,6 +516,21 @@ export function openComposer({ quotePost = null } = {}) {
       sync();
     }
   });
+
+  const cameraBtn = h(
+    'button',
+    {
+      class: 'tool-btn',
+      type: 'button',
+      title: 'Filmer une vidéo avec la caméra',
+      onclick: () =>
+        openVideoRecorder({
+          onDone: (recorded) => setMedia(recorded),
+        }),
+    },
+    icon('camera', 18),
+    h('span', null, 'Caméra')
+  );
 
   const body = h(
     'div',
@@ -491,6 +556,7 @@ export function openComposer({ quotePost = null } = {}) {
         icon('image', 18),
         h('span', null, 'Média')
       ),
+      cameraBtn,
       fileInput,
       h(
         'span',
@@ -540,8 +606,9 @@ export function openComposer({ quotePost = null } = {}) {
     }
   });
 
+  if (media) renderPreview();
   sync();
-  setTimeout(() => textarea.focus(), 60);
+  setTimeout(() => textarea.focus({ preventScroll: true }), 60);
 }
 
 /* ------------------------------------------------------------------ */
@@ -690,10 +757,27 @@ export async function feedView(root) {
 /* Reels                                                              */
 /* ------------------------------------------------------------------ */
 
-let reelsMuted = true;
+const REELS_SOUND_KEY = 'rbp_reels_sound';
+
+let reelsMuted = (() => {
+  try {
+    return localStorage.getItem(REELS_SOUND_KEY) !== 'on';
+  } catch {
+    return true;
+  }
+})();
+
+function persistReelsSound() {
+  try {
+    localStorage.setItem(REELS_SOUND_KEY, reelsMuted ? 'off' : 'on');
+  } catch {
+    // Stockage indisponible : le choix reste valable pour la session.
+  }
+}
 
 function toggleReelsMuted() {
   reelsMuted = !reelsMuted;
+  persistReelsSound();
   for (const video of document.querySelectorAll('.reel-video')) {
     video.muted = reelsMuted;
   }
@@ -774,6 +858,18 @@ function reelSlide(postRow) {
       h(
         'button',
         {
+          class: 'reel-action',
+          type: 'button',
+          title: 'Filmer une vidéo avec ce son',
+          'aria-label': 'Utiliser ce son',
+          onclick: () => recordWithSound(postRow),
+        },
+        icon('music', 24),
+        h('span', null, 'Son')
+      ),
+      h(
+        'button',
+        {
           class: 'reel-action reel-mute',
           type: 'button',
           'aria-label': 'Couper ou activer le son',
@@ -786,15 +882,20 @@ function reelSlide(postRow) {
       'div',
       { class: 'reel-info' },
       h(
-        'a',
-        { class: 'reel-author', href: `#/u/${postRow.author.username}` },
-        avatarEl(postRow.author, { size: 38 }),
+        'div',
+        { class: 'reel-author-row' },
         h(
-          'div',
-          null,
-          h('b', null, postRow.author.display_name),
-          h('span', null, `@${postRow.author.username}`)
-        )
+          'a',
+          { class: 'reel-author', href: `#/u/${postRow.author.username}` },
+          avatarEl(postRow.author, { size: 38 }),
+          h(
+            'div',
+            null,
+            h('b', null, postRow.author.display_name),
+            h('span', null, `@${postRow.author.username}`)
+          )
+        ),
+        quickSocialActions(postRow.author, { className: 'reel-quick' })
       ),
       postRow.content ? h('p', { class: 'reel-text' }, richText(postRow.content)) : null,
       h(
@@ -817,10 +918,9 @@ export async function reelsView(root) {
     posts = [];
   }
 
-  root.append(viewHead('Scroll'));
-
   if (!posts.length) {
     root.append(
+      viewHead('Scroll'),
       emptyState({
         iconName: 'video',
         title: 'Aucune vidéo pour le moment',
@@ -838,15 +938,12 @@ export async function reelsView(root) {
   }
 
   const container = h('div', { class: 'reels' });
-  for (const postRow of posts) container.append(reelSlide(postRow));
 
   const hint = h(
     'div',
     { class: 'reels-hint' },
     `Swipe pour découvrir · ${reelsMuted ? 'son coupé' : 'son activé'}`
   );
-
-  root.append(container, hint);
 
   const observer = new IntersectionObserver(
     (entries) => {
@@ -868,7 +965,37 @@ export async function reelsView(root) {
     { threshold: [0, 0.55, 1] }
   );
 
-  for (const slide of container.children) observer.observe(slide);
+  function renderSlides() {
+    observer.disconnect();
+    for (const video of container.querySelectorAll('video')) video.pause();
+    container.replaceChildren(...posts.map(reelSlide));
+    for (const slide of container.children) observer.observe(slide);
+    container.scrollTop = 0;
+  }
+
+  function shuffleReels() {
+    for (let index = posts.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(Math.random() * (index + 1));
+      [posts[index], posts[swap]] = [posts[swap], posts[index]];
+    }
+    renderSlides();
+    toast('Vidéos mélangées.', 'info');
+  }
+
+  const shuffleBtn = h(
+    'button',
+    {
+      class: 'btn-ghost btn-sm reels-shuffle',
+      type: 'button',
+      title: 'Mélanger les vidéos',
+      onclick: shuffleReels,
+    },
+    icon('shuffle', 16),
+    h('span', null, 'Mélanger')
+  );
+
+  root.append(viewHead('Scroll', { right: shuffleBtn }), container, hint);
+  renderSlides();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1029,7 +1156,6 @@ export async function postDetailView(root, id) {
       input.value = '';
       renderComments();
       syncCommentCount();
-      list.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (error) {
       toast(error.message, 'error');
       sendBtn.disabled = false;

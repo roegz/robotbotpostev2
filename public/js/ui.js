@@ -180,11 +180,9 @@ export function toast(message, type = 'info', { duration = 3800 } = {}) {
 /* Modales                                                            */
 /* ------------------------------------------------------------------ */
 
-let activeModal = null;
+const modalStack = [];
 
 export function openModal(content, { title, className = '', onClose } = {}) {
-  closeModal();
-
   const root = document.getElementById('modal-root');
   const panel = h(
     'div',
@@ -208,6 +206,7 @@ export function openModal(content, { title, className = '', onClose } = {}) {
     'div',
     {
       class: 'overlay',
+      style: { zIndex: String(120 + modalStack.length) },
       onclick: (event) => {
         if (event.target === overlay) closeModal();
       },
@@ -215,27 +214,34 @@ export function openModal(content, { title, className = '', onClose } = {}) {
     panel
   );
 
-  root.replaceChildren(overlay);
+  // Les modales s'empilent : on peut ouvrir la caméra par-dessus le composeur.
+  root.append(overlay);
   document.body.classList.add('modal-open');
   requestAnimationFrame(() => overlay.classList.add('is-open'));
 
-  activeModal = { overlay, onClose };
+  modalStack.push({ overlay, onClose });
 
   setTimeout(() => {
-    panel.querySelector('textarea, input:not([type="hidden"]), button')?.focus();
+    panel
+      .querySelector('textarea, input:not([type="hidden"]), button')
+      ?.focus({ preventScroll: true });
   }, 40);
 
   return { panel, close: closeModal };
 }
 
 export function closeModal() {
-  if (!activeModal) return;
-  const { overlay, onClose } = activeModal;
-  activeModal = null;
+  const entry = modalStack.pop();
+  if (!entry) return;
+  const { overlay, onClose } = entry;
   overlay.classList.remove('is-open');
-  document.body.classList.remove('modal-open');
+  if (!modalStack.length) document.body.classList.remove('modal-open');
   setTimeout(() => overlay.remove(), 170);
   onClose?.();
+}
+
+export function closeAllModals() {
+  while (modalStack.length) closeModal();
 }
 
 function confirmDialog({
@@ -274,7 +280,14 @@ function confirmDialog({
       )
     );
 
-    openModal(content, { title, onClose: () => finish(false) });
+    openModal(content, {
+      title,
+      onClose: () => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      },
+    });
   });
 }
 

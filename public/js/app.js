@@ -1,6 +1,6 @@
 import { get, post } from './api.js';
 import { state, on, go, currentPath, setUnread, emit } from './state.js';
-import { h, avatarEl, toast, updateCountdowns, closeModal } from './ui.js';
+import { h, avatarEl, toast, updateCountdowns, closeAllModals } from './ui.js';
 import { icon, brandMark } from './icons.js';
 import { feedView, reelsView, postDetailView, openComposer } from './posts.js';
 import { profileView, friendsView } from './social.js';
@@ -8,6 +8,7 @@ import { chatView } from './chat.js';
 import { renderAuth } from './authView.js';
 
 const appEl = document.getElementById('app');
+let lastRenderedPath = null;
 
 /* ------------------------------------------------------------------ */
 /* Coquille (sidebar + barre mobile)                                   */
@@ -160,6 +161,7 @@ function renderRoute() {
   const path = currentPath();
 
   if (!state.me) {
+    lastRenderedPath = null;
     renderAuth(appEl);
     return;
   }
@@ -169,10 +171,17 @@ function renderRoute() {
     return;
   }
 
+  // Un rafraîchissement de la même route (like, message, retour) ne doit pas
+  // faire remonter la page ni revenir en haut des reels.
+  const samePath = path === lastRenderedPath;
+  const previousScroll = samePath ? window.scrollY : 0;
+  const previousReels = samePath ? (document.querySelector('.reels')?.scrollTop ?? 0) : 0;
+  lastRenderedPath = path;
+
   drawShell();
 
   const view = document.getElementById('view');
-  window.scrollTo({ top: 0, behavior: 'instant' });
+  if (!samePath) window.scrollTo({ top: 0, behavior: 'instant' });
 
   let result;
   if (!path) {
@@ -193,18 +202,27 @@ function renderRoute() {
     result = feedView(view);
   }
 
-  Promise.resolve(result).catch((error) => {
-    console.error(error);
-    toast(error.message || 'Une erreur est survenue.', 'error');
-    view.append(
-      h(
-        'div',
-        { class: 'empty' },
-        h('h3', null, 'Impossible d’afficher cette page'),
-        h('p', null, error.message || 'Réessaie dans un instant.')
-      )
-    );
-  });
+  Promise.resolve(result)
+    .catch((error) => {
+      console.error(error);
+      toast(error.message || 'Une erreur est survenue.', 'error');
+      view.append(
+        h(
+          'div',
+          { class: 'empty' },
+          h('h3', null, 'Impossible d’afficher cette page'),
+          h('p', null, error.message || 'Réessaie dans un instant.')
+        )
+      );
+    })
+    .then(() => {
+      if (!samePath) return;
+      requestAnimationFrame(() => {
+        const reelsEl = document.querySelector('.reels');
+        if (reelsEl) reelsEl.scrollTop = previousReels;
+        window.scrollTo({ top: previousScroll, behavior: 'instant' });
+      });
+    });
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +294,8 @@ async function logout() {
   state.socket?.disconnect();
   state.socket = null;
   setUnread(0);
-  closeModal();
+  closeAllModals();
+  lastRenderedPath = null;
   location.hash = '#/';
   renderRoute();
 }

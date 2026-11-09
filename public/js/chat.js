@@ -2,6 +2,7 @@ import { get, post } from './api.js';
 import { state, go, emit, on } from './state.js';
 import { h, avatarEl, toast, emptyState, viewHead } from './ui.js';
 import { icon } from './icons.js';
+import { openNewMessageDialog } from './relations.js';
 
 function conversationRow(conversation) {
   return h(
@@ -68,14 +69,29 @@ export async function chatView(root, username) {
       'div',
       { class: 'chat-list-head' },
       h('h2', null, 'Messages'),
-      h('span', { class: 'pill' }, `${state.config.ttl_hours} h`)
+      h(
+        'div',
+        { class: 'chat-list-actions' },
+        h(
+          'button',
+          {
+            class: 'icon-btn',
+            type: 'button',
+            title: 'Nouveau message',
+            'aria-label': 'Nouveau message',
+            onclick: () => openNewMessageDialog(),
+          },
+          icon('edit', 18)
+        ),
+        h('span', { class: 'pill' }, `${state.config.ttl_hours} h`)
+      )
     ),
     conversations.length
       ? h('div', { class: 'convos' }, ...conversations.map(conversationRow))
       : h(
           'p',
           { class: 'muted small pad' },
-          'Aucune conversation. Ouvre un profil pour envoyer un message.'
+          'Aucune conversation pour le moment. Utilise le bouton ✎ pour écrire à quelqu’un.'
         )
   );
 
@@ -286,5 +302,5 @@ async function openThread(threadPane, username) {
     }, 2500);
   });
 
-  setTimeout(() => input.focus(), 80);
+  setTimeout(() => input.focus({ preventScroll: true }), 80);
 }

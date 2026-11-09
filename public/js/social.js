@@ -13,6 +13,7 @@ import {
 } from './ui.js';
 import { icon } from './icons.js';
 import { postCard, openComposer } from './posts.js';
+import { loadRelations } from './relations.js';
 
 /* ------------------------------------------------------------------ */
 /* Profil                                                             */
@@ -136,6 +137,11 @@ export async function profileView(root, username) {
 
   const actions = h('div', { class: 'profile-actions' });
 
+  async function refreshAfterRelation() {
+    await loadRelations({ force: true });
+    emit('refresh');
+  }
+
   if (isMe) {
     actions.append(
       actionButton('Modifier le profil', {
@@ -143,94 +149,99 @@ export async function profileView(root, username) {
         onClick: () => openEditProfile(user),
       })
     );
-  } else if (relation.state === 'none') {
-    actions.append(
-      actionButton('Ajouter en ami', {
-        primary: true,
-        onClick: async () => {
-          try {
-            const result = await post('/friends/request', { username: user.username });
-            toast(
-              result.relation.state === 'friends'
-                ? 'Vous êtes maintenant amis !'
-                : 'Demande d’ami envoyée.',
-              'success'
-            );
-            emit('refresh');
-          } catch (error) {
-            toast(error.message, 'error');
-          }
-        },
-      })
-    );
-  } else if (relation.state === 'outgoing') {
-    actions.append(actionButton('Demande envoyée', { disabled: true }));
-    actions.append(
-      actionButton('Annuler', {
-        danger: true,
-        onClick: async () => {
-          try {
-            await del(`/friends/${relation.friendship_id}`);
-            toast('Demande annulée.', 'info');
-            emit('refresh');
-          } catch (error) {
-            toast(error.message, 'error');
-          }
-        },
-      })
-    );
-  } else if (relation.state === 'incoming') {
-    actions.append(
-      actionButton('Accepter', {
-        primary: true,
-        onClick: async () => {
-          try {
-            await post(`/friends/${relation.friendship_id}/accept`);
-            toast('Vous êtes maintenant amis !', 'success');
-            emit('refresh');
-          } catch (error) {
-            toast(error.message, 'error');
-          }
-        },
-      }),
-      actionButton('Refuser', {
-        onClick: async () => {
-          try {
-            await post(`/friends/${relation.friendship_id}/decline`);
-            toast('Demande refusée.', 'info');
-            emit('refresh');
-          } catch (error) {
-            toast(error.message, 'error');
-          }
-        },
-      })
-    );
-  } else if (relation.state === 'friends') {
+  } else {
     actions.append(
       actionButton('Message', {
-        primary: true,
-        onClick: () => go(`messages/${user.username}`),
-      }),
-      actionButton('Retirer', {
-        danger: true,
-        onClick: async () => {
-          const confirmed = await confirmDialog({
-            title: 'Retirer cet ami ?',
-            message: `@${user.username} ne verra plus tes posts dans son feed d’amis.`,
-            confirmLabel: 'Retirer',
-            danger: true,
-          });
-          if (!confirmed) return;
-          try {
-            await del(`/friends/${relation.friendship_id}`);
-            toast('Ami retiré.', 'info');
-            emit('refresh');
-          } catch (error) {
-            toast(error.message, 'error');
-          }
-        },
+        primary: relation.state === 'friends',
+        onClick: () => go(`messages/${encodeURIComponent(user.username)}`),
       })
     );
+
+    if (relation.state === 'none') {
+      actions.append(
+        actionButton('Ajouter en ami', {
+          primary: true,
+          onClick: async () => {
+            try {
+              const result = await post('/friends/request', { username: user.username });
+              toast(
+                result.relation.state === 'friends'
+                  ? 'Vous êtes maintenant amis !'
+                  : 'Demande d’ami envoyée.',
+                'success'
+              );
+              await refreshAfterRelation();
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          },
+        })
+      );
+    } else if (relation.state === 'outgoing') {
+      actions.append(actionButton('Demande envoyée', { disabled: true }));
+      actions.append(
+        actionButton('Annuler', {
+          danger: true,
+          onClick: async () => {
+            try {
+              await del(`/friends/${relation.friendship_id}`);
+              toast('Demande annulée.', 'info');
+              await refreshAfterRelation();
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          },
+        })
+      );
+    } else if (relation.state === 'incoming') {
+      actions.append(
+        actionButton('Accepter', {
+          primary: true,
+          onClick: async () => {
+            try {
+              await post(`/friends/${relation.friendship_id}/accept`);
+              toast('Vous êtes maintenant amis !', 'success');
+              await refreshAfterRelation();
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          },
+        }),
+        actionButton('Refuser', {
+          onClick: async () => {
+            try {
+              await post(`/friends/${relation.friendship_id}/decline`);
+              toast('Demande refusée.', 'info');
+              await refreshAfterRelation();
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          },
+        })
+      );
+    } else if (relation.state === 'friends') {
+      actions.append(
+        actionButton('Retirer', {
+          danger: true,
+          onClick: async () => {
+            const confirmed = await confirmDialog({
+              title: 'Retirer cet ami ?',
+              message: `@${user.username} ne verra plus tes posts dans son feed d’amis.`,
+              confirmLabel: 'Retirer',
+              danger: true,
+            });
+            if (!confirmed) return;
+            try {
+              await del(`/friends/${relation.friendship_id}`);
+              toast('Ami retiré.', 'info');
+              await refreshAfterRelation();
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          },
+        })
+      );
+    }
   }
 
   const head = h(
@@ -342,6 +353,20 @@ function personRow(user, actionNodes) {
   );
 }
 
+function messageButton(user) {
+  return h(
+    'button',
+    {
+      class: 'btn-ghost btn-sm',
+      type: 'button',
+      title: `Écrire à @${user.username}`,
+      onclick: () => go(`messages/${encodeURIComponent(user.username)}`),
+    },
+    icon('chat', 14),
+    'Message'
+  );
+}
+
 function relationButton(user, relation, afterChange) {
   if (relation?.state === 'friends') {
     return h('span', { class: 'pill pill--ok' }, icon('check', 14), 'Amis');
@@ -442,6 +467,7 @@ export async function friendsView(root) {
   }
 
   function afterChange() {
+    loadRelations({ force: true });
     reload();
   }
 
@@ -597,7 +623,7 @@ export async function friendsView(root) {
       results.append(
         h('h2', { class: 'section-title' }, 'Résultats'),
         ...found.users.map((user) =>
-          personRow(user, [relationButton(user, user.relation, afterChange)])
+          personRow(user, [messageButton(user), relationButton(user, user.relation, afterChange)])
         )
       );
     } catch (error) {
