@@ -975,6 +975,11 @@ export function tagView(root, rawTag) {
 
 const REELS_SOUND_KEY = 'rbp_reels_sound';
 
+// Nombre de vidéos gardées « prêtes » autour de celle qui est à l'écran :
+// 2 devant (pour que le swipe soit instantané) et 1 derrière.
+const PRELOAD_AHEAD = 2;
+const PRELOAD_BEHIND = 1;
+
 let reelsMuted = (() => {
   try {
     return localStorage.getItem(REELS_SOUND_KEY) !== 'on';
@@ -982,6 +987,10 @@ let reelsMuted = (() => {
     return true;
   }
 })();
+
+// Une seule vidéo du scroll peut porter le son. Toutes les autres sont
+// muettes et en pause, sinon les bandes-son se superposent.
+let activeReelVideo = null;
 
 function persistReelsSound() {
   try {
@@ -991,17 +1000,52 @@ function persistReelsSound() {
   }
 }
 
-function toggleReelsMuted() {
-  reelsMuted = !reelsMuted;
-  persistReelsSound();
-  for (const video of document.querySelectorAll('.reel-video')) {
-    video.muted = reelsMuted;
-  }
+function applyReelsSoundUi() {
   for (const button of document.querySelectorAll('.reel-mute')) {
     button.replaceChildren(icon(reelsMuted ? 'mute' : 'sound', 24));
   }
   const hint = document.querySelector('.reels-hint');
-  if (hint) hint.textContent = `Swipe pour découvrir · ${reelsMuted ? 'son coupé' : 'son activé'}`;
+  if (hint) {
+    hint.textContent = `Swipe pour découvrir · ${reelsMuted ? 'son coupé' : 'son activé'}`;
+  }
+}
+
+/** Donne l'exclusivité du son à une vidéo et coupe toutes les autres. */
+function claimReelVideo(video) {
+  for (const other of document.querySelectorAll('.reel-video')) {
+    if (other === video) continue;
+    if (!other.paused) other.pause();
+    other.muted = true;
+  }
+  activeReelVideo = video;
+  video.muted = reelsMuted;
+}
+
+/** Lance une vidéo ; si le navigateur refuse le son automatique, on la muet. */
+async function playReelVideo(video) {
+  if (!video) return;
+  claimReelVideo(video);
+
+  try {
+    await video.play();
+  } catch {
+    if (video.muted) return;
+    reelsMuted = true;
+    persistReelsSound();
+    video.muted = true;
+    applyReelsSoundUi();
+    video.play().catch(() => {});
+  }
+}
+
+function toggleReelsMuted() {
+  reelsMuted = !reelsMuted;
+  persistReelsSound();
+  for (const video of document.querySelectorAll('.reel-video')) {
+    const isActive = video === activeReelVideo && !video.paused;
+    video.muted = isActive ? reelsMuted : true;
+  }
+  applyReelsSoundUi();
 }
 
 function reelSlide(postRow) {
@@ -1012,9 +1056,13 @@ function reelSlide(postRow) {
     playsInline: true,
     preload: 'none',
   });
-  video.muted = reelsMuted;
+  video.muted = true;
+
+  // Garde-fou : dès qu'une vidéo démarre, les autres se mettent en pause.
+  video.addEventListener('play', () => claimReelVideo(video));
+
   video.addEventListener('click', () => {
-    if (video.paused) video.play().catch(() => {});
+    if (video.paused) playReelVideo(video);
     else video.pause();
   });
 
@@ -1182,54 +1230,105 @@ export async function reelsView(root, rawTag = null) {
     `Swipe pour découvrir · ${reelsMuted ? 'son coupé' : 'son activé'}`
   );
 
-  // Les vidéos ne sont chargées qu'à l'approche de l'écran, puis libérées
-  // quand on est loin : indispensable sur un appareil modeste.
-  const ensureSrc = (video) => {
+  // Seules la vidéo courante, les 2 suivantes et la précédente gardent une
+  // source. Tout le reste est libéré : pas de préchargement des 30 vidéos.
+  const loadReelVideo = (video, preload) => {
+    if (video.preload !== preload) video.preload = preload;
     if (!video.getAttribute('src') && video.dataset.src) {
       video.src = video.dataset.src;
     }
   };
 
-  const observer = new IntersectionObserver(
-    (entries) => {
-      if (!container.isConnected) {
-        observer.disconnect();
-        return;
-      }
-      for (const entry of entries) {
-        const video = entry.target.querySelector('video');
-        if (!video) continue;
-
-        if (entry.isIntersecting) {
-          ensureSrc(video);
-          if (entry.intersectionRatio > 0.55) {
-            video.muted = reelsMuted;
-            video.play().catch(() => {});
-          } else {
-            video.pause();
-          }
-        } else {
-          video.pause();
-          if (video.getAttribute('src')) {
-            video.removeAttribute('src');
-            video.load();
-          }
-        }
-      }
-    },
-    { root: container, rootMargin: '150% 0px', threshold: [0, 0.55, 1] }
-  );
-
-  function renderSlides() {
-    observer.disconnect();
-    for (const video of container.querySelectorAll('video')) {
-      video.pause();
+  const releaseReelVideo = (video) => {
+    if (!video.paused) video.pause();
+    video.muted = true;
+    video.preload = 'none';
+    if (video.getAttribute('src')) {
       video.removeAttribute('src');
       video.load();
     }
+    if (activeReelVideo === video) activeReelVideo = null;
+  };
+
+  let slides = [];
+  let activeIndex = -1;
+  let frame = 0;
+
+  const currentIndex = () => {
+    const height = container.clientHeight || 1;
+    const raw = Math.round(container.scrollTop / height);
+    return Math.max(0, Math.min(slides.length - 1, raw));
+  };
+
+  function updateWindow({ force = false } = {}) {
+    if (!slides.length) return;
+
+    const index = currentIndex();
+    if (!force && index === activeIndex) return;
+
+    const previous = slides[activeIndex]?.video;
+    activeIndex = index;
+
+    slides.forEach(({ video }, position) => {
+      const distance = position - index;
+      if (distance >= -PRELOAD_BEHIND && distance <= PRELOAD_AHEAD) {
+        loadReelVideo(video, distance === 0 ? 'auto' : 'metadata');
+      } else {
+        releaseReelVideo(video);
+      }
+    });
+
+    if (previous && previous !== slides[index]?.video) {
+      previous.pause();
+      previous.muted = true;
+    }
+
+    const active = slides[index]?.video;
+    if (active) playReelVideo(active);
+  }
+
+  const onScroll = () => {
+    if (!container.isConnected) {
+      container.removeEventListener('scroll', onScroll);
+      document.removeEventListener('visibilitychange', onVisibility);
+      return;
+    }
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      updateWindow();
+    });
+  };
+
+  const onVisibility = () => {
+    if (!container.isConnected) {
+      document.removeEventListener('visibilitychange', onVisibility);
+      return;
+    }
+    if (document.hidden) {
+      for (const { video } of slides) video.pause();
+      activeReelVideo = null;
+    } else {
+      updateWindow({ force: true });
+    }
+  };
+
+  container.addEventListener('scroll', onScroll, { passive: true });
+  document.addEventListener('visibilitychange', onVisibility);
+
+  function renderSlides() {
+    for (const { video } of slides) releaseReelVideo(video);
+    slides = [];
+    activeIndex = -1;
+
     container.replaceChildren(...posts.map(reelSlide));
-    for (const slide of container.children) observer.observe(slide);
+    slides = Array.from(container.children).map((section) => ({
+      section,
+      video: section.querySelector('video'),
+    }));
+
     container.scrollTop = 0;
+    updateWindow({ force: true });
   }
 
   function shuffleReels() {

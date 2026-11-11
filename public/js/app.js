@@ -181,6 +181,10 @@ function renderRoute() {
   const previousReels = samePath ? (document.querySelector('.reels')?.scrollTop ?? 0) : 0;
   lastRenderedPath = path;
 
+  // Coupe les médias en cours : sans ça, le son d'une vidéo peut continuer
+  // après un changement de page (le DOM est remplacé mais la lecture non).
+  document.querySelectorAll('video, audio').forEach((media) => media.pause());
+
   drawShell();
 
   const view = document.getElementById('view');

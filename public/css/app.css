@@ -1452,6 +1452,13 @@ video.post-media {
   border: 1px solid var(--line);
   background: #000;
   overscroll-behavior: contain;
+  /* La barre de défilement native parasitait le swipe plein écran. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.reels::-webkit-scrollbar {
+  display: none;
 }
 
 .reel {
