@@ -3,6 +3,7 @@ import './config.js';
 import http from 'node:http';
 import path from 'node:path';
 import express from 'express';
+import compression from 'compression';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
@@ -36,6 +37,10 @@ const PORT = Number(process.env.PORT) || 3000;
 const app = express();
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+
+// Compression gzip/brotli : le CSS et les réponses JSON voyagent beaucoup
+// plus léger (utile sur mobile et sur les petites connexions).
+app.use(compression({ threshold: 1024 }));
 
 /* ------------------------------------------------------------------ */
 /* Sécurité                                                            */

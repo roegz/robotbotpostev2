@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS likes (
   PRIMARY KEY (post_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS post_tags (
+  post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  tag     TEXT NOT NULL,
+  PRIMARY KEY (post_id, tag)
+);
+
 CREATE TABLE IF NOT EXISTS comments (
   id         TEXT PRIMARY KEY,
   post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
@@ -64,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_created  ON posts (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_user     ON posts (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_expires  ON posts (expires_at);
 CREATE INDEX IF NOT EXISTS idx_posts_repost   ON posts (repost_of);
+CREATE INDEX IF NOT EXISTS idx_posts_media    ON posts (media_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_post_tags_tag  ON post_tags (tag, post_id);
 CREATE INDEX IF NOT EXISTS idx_comments_post  ON comments (post_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_exp   ON comments (expires_at);
 CREATE INDEX IF NOT EXISTS idx_messages_pair  ON messages (sender_id, recipient_id, created_at DESC);

@@ -4,6 +4,7 @@ import {
   h,
   avatarEl,
   richText,
+  normalizeTag,
   formatCount,
   timeAgo,
   remaining,
@@ -25,13 +26,15 @@ import { openVideoRecorder } from './recorder.js';
 
 function mediaEl(media) {
   if (media.type === 'video') {
-    return h('video', {
+    const video = h('video', {
       class: 'post-media',
       src: media.url,
       controls: true,
       playsInline: true,
-      preload: 'metadata',
+      preload: 'none',
     });
+    observeFeedVideo(video);
+    return video;
   }
 
   const image = h('img', {
@@ -39,9 +42,26 @@ function mediaEl(media) {
     src: media.url,
     alt: '',
     loading: 'lazy',
+    decoding: 'async',
   });
   image.addEventListener('click', () => openLightbox(media.url));
   return image;
+}
+
+let feedVideoObserver = null;
+
+/** Met en pause les vidéos du feed sorties de l'écran (CPU / batterie). */
+function observeFeedVideo(video) {
+  if (!('IntersectionObserver' in window)) return;
+  feedVideoObserver ??= new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) entry.target.pause?.();
+      }
+    },
+    { threshold: 0 }
+  );
+  feedVideoObserver.observe(video);
 }
 
 function quoteEl(quote) {
@@ -66,6 +86,7 @@ function quoteEl(quote) {
             src: quote.media.url,
             alt: '',
             loading: 'lazy',
+            decoding: 'async',
             onclick: () => openLightbox(quote.media.url),
           })
         : h('video', {
@@ -73,7 +94,7 @@ function quoteEl(quote) {
             src: quote.media.url,
             controls: true,
             playsInline: true,
-            preload: 'metadata',
+            preload: 'none',
           })
       : null
   );
@@ -400,6 +421,14 @@ function quotePreview(quotePost) {
   );
 }
 
+function insertAtCursor(field, text) {
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? start;
+  field.setRangeText(text, start, end, 'end');
+  field.focus({ preventScroll: true });
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 export function openComposer({ quotePost = null, initialMedia = null } = {}) {
   const max = state.config.max_post_length;
   const textarea = h('textarea', {
@@ -440,9 +469,9 @@ export function openComposer({ quotePost = null, initialMedia = null } = {}) {
             src: media.url,
             controls: true,
             playsInline: true,
-            preload: 'metadata',
+            preload: 'none',
           })
-        : h('img', { class: 'composer-media', src: media.url, alt: '' });
+        : h('img', { class: 'composer-media', src: media.url, alt: '', decoding: 'async' });
 
     const soundChip =
       media.type === 'video' && media.soundAuthor
@@ -557,6 +586,17 @@ export function openComposer({ quotePost = null, initialMedia = null } = {}) {
         h('span', null, 'Média')
       ),
       cameraBtn,
+      h(
+        'button',
+        {
+          class: 'tool-btn',
+          type: 'button',
+          title: 'Ajouter un hashtag (#)',
+          onclick: () => insertAtCursor(textarea, '#'),
+        },
+        icon('hash', 18),
+        h('span', null, 'Tag')
+      ),
       fileInput,
       h(
         'span',
@@ -612,11 +652,40 @@ export function openComposer({ quotePost = null, initialMedia = null } = {}) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Feed                                                               */
+/* Feed + pages de hashtag                                            */
 /* ------------------------------------------------------------------ */
 
-export async function feedView(root) {
-  let scope = state.feedScope;
+const HOME_MODES = [
+  { value: 'friends', label: 'Amis' },
+  { value: 'all', label: 'Découvrir' },
+  { value: 'top', label: 'Top' },
+  { value: 'random', label: 'Au hasard' },
+];
+
+const TAG_MODES = [
+  { value: 'recent', label: 'Récents' },
+  { value: 'top', label: 'Top' },
+  { value: 'random', label: 'Au hasard' },
+];
+
+function modeSort(mode) {
+  return mode === 'top' || mode === 'random' ? mode : 'recent';
+}
+
+async function postsFeed(root, { title, back = false, tag = null } = {}) {
+  const modes = tag ? TAG_MODES : HOME_MODES;
+  const pageSize = state.lite ? 12 : 20;
+
+  let mode = modes[0].value;
+  if (!tag) {
+    try {
+      const stored = localStorage.getItem('rbp_feed_scope');
+      if (modes.some((item) => item.value === stored)) mode = stored;
+    } catch {
+      // Stockage indisponible : on reste sur le feed d'amis.
+    }
+  }
+
   let cursor = null;
   let loading = false;
   let exhausted = false;
@@ -624,33 +693,91 @@ export async function feedView(root) {
   const list = h('div', { class: 'post-list' });
   const sentinel = h('div', { class: 'sentinel' });
   const tabs = h('div', { class: 'tabs' });
+  const trends = h('div', { class: 'tag-strip', hidden: true });
 
-  const tabFor = (label, value) =>
+  const reshuffleBtn = h(
+    'button',
+    {
+      class: 'btn-ghost btn-sm',
+      type: 'button',
+      title: 'Relancer le hasard',
+      onclick: () => reset(),
+    },
+    icon('shuffle', 16),
+    h('span', null, 'Relancer')
+  );
+  reshuffleBtn.hidden = mode !== 'random';
+
+  const headActions = h('div', { class: 'row-end' });
+  if (tag) {
+    headActions.append(
+      h(
+        'a',
+        {
+          class: 'btn-ghost btn-sm',
+          href: `#/scroll/tag/${encodeURIComponent(tag)}`,
+          title: 'Voir les vidéos de ce thème en scroll',
+        },
+        icon('reels', 16),
+        h('span', null, 'Scroll')
+      )
+    );
+  }
+  headActions.append(reshuffleBtn);
+
+  const head = viewHead(title, { back, right: headActions });
+
+  const tabEls = modes.map((item) =>
     h(
       'button',
       {
-        class: `tab${scope === value ? ' is-active' : ''}`,
+        class: `tab${mode === item.value ? ' is-active' : ''}`,
         type: 'button',
-        dataset: { scope: value },
-        onclick: () => switchScope(value),
+        dataset: { scope: item.value },
+        onclick: () => switchMode(item.value),
       },
-      label
-    );
-
-  tabs.append(tabFor('Amis', 'friends'), tabFor('Découvrir', 'all'));
-
-  const teaser = h(
-    'button',
-    { class: 'composer-teaser', type: 'button', onclick: () => openComposer() },
-    avatarEl(state.me, { size: 42 }),
-    h('span', { class: 'composer-teaser-text' }, `Quoi de neuf, ${state.me.display_name} ?`),
-    h('span', { class: 'composer-teaser-hint' }, icon('image', 18), icon('video', 18))
+      item.label
+    )
   );
+  tabs.append(...tabEls);
 
-  root.append(viewHead('Accueil'), tabs, teaser, list, sentinel);
+  const teaser = tag
+    ? null
+    : h(
+        'button',
+        { class: 'composer-teaser', type: 'button', onclick: () => openComposer() },
+        avatarEl(state.me, { size: 42 }),
+        h('span', { class: 'composer-teaser-text' }, `Quoi de neuf, ${state.me.display_name} ?`),
+        h('span', { class: 'composer-teaser-hint' }, icon('image', 18), icon('video', 18))
+      );
 
-  function emptyForScope() {
-    if (scope === 'friends') {
+  root.append(head, tabs);
+  if (!tag) {
+    root.append(trends, teaser);
+  }
+  root.append(list, sentinel);
+
+  function emptyForMode() {
+    if (tag) {
+      return emptyState({
+        iconName: 'hash',
+        title: `Aucun post avec #${tag}`,
+        text: 'Sois la première personne à publier sur ce thème.',
+        actions: [
+          h(
+            'button',
+            { class: 'btn-primary', type: 'button', onclick: () => openComposer() },
+            'Créer un post'
+          ),
+          h(
+            'a',
+            { class: 'btn-ghost', href: '#/' },
+            'Retour à l’accueil'
+          ),
+        ],
+      });
+    }
+    if (mode === 'friends') {
       return emptyState({
         iconName: 'users',
         title: 'Ton feed est vide',
@@ -658,13 +785,41 @@ export async function feedView(root) {
         actions: [
           h(
             'button',
-            { class: 'btn-primary', type: 'button', onclick: () => switchScope('all') },
+            { class: 'btn-primary', type: 'button', onclick: () => switchMode('all') },
             'Découvrir'
           ),
           h(
             'button',
             { class: 'btn-ghost', type: 'button', onclick: () => go('friends') },
             'Trouver des amis'
+          ),
+        ],
+      });
+    }
+    if (mode === 'top') {
+      return emptyState({
+        iconName: 'heart',
+        title: 'Pas encore de posts aimés',
+        text: 'Le classement se remplit dès que les posts reçoivent des cœurs.',
+        actions: [
+          h(
+            'button',
+            { class: 'btn-primary', type: 'button', onclick: () => switchMode('all') },
+            'Découvrir'
+          ),
+        ],
+      });
+    }
+    if (mode === 'random') {
+      return emptyState({
+        iconName: 'shuffle',
+        title: 'Rien à afficher au hasard',
+        text: 'Il n’y a pas encore assez de posts. Réessaie dans un instant.',
+        actions: [
+          h(
+            'button',
+            { class: 'btn-primary', type: 'button', onclick: () => reset() },
+            'Relancer'
           ),
         ],
       });
@@ -692,12 +847,23 @@ export async function feedView(root) {
     }
 
     try {
-      const query =
-        `/posts?scope=${scope}&limit=20` +
-        (cursor
-          ? `&before=${encodeURIComponent(cursor.before)}&before_id=${encodeURIComponent(cursor.before_id)}`
-          : '');
-      const data = await get(query);
+      const params = new URLSearchParams({
+        scope: tag ? 'all' : mode === 'friends' ? 'friends' : 'all',
+        limit: String(pageSize),
+        sort: modeSort(mode),
+      });
+      if (tag) params.set('tag', tag);
+
+      if (cursor) {
+        if (cursor.offset !== undefined) {
+          params.set('offset', String(cursor.offset));
+        } else {
+          params.set('before', cursor.before);
+          params.set('before_id', cursor.before_id);
+        }
+      }
+
+      const data = await get(`/posts?${params.toString()}`);
 
       if (first) list.replaceChildren();
       for (const postRow of data.posts) list.append(postCard(postRow));
@@ -705,7 +871,7 @@ export async function feedView(root) {
       cursor = data.next;
       exhausted = !data.next;
 
-      if (first && data.posts.length === 0) list.append(emptyForScope());
+      if (first && data.posts.length === 0) list.append(emptyForMode());
     } catch (error) {
       if (first) list.replaceChildren();
       toast(error.message, 'error');
@@ -727,15 +893,44 @@ export async function feedView(root) {
     load(true);
   }
 
-  function switchScope(value) {
-    if (scope === value) return;
-    scope = value;
-    state.feedScope = value;
-    localStorage.setItem('rbp_feed_scope', value);
-    for (const button of tabs.querySelectorAll('.tab')) {
+  function switchMode(value) {
+    if (mode === value) return;
+    mode = value;
+    if (!tag) {
+      state.feedScope = value;
+      try {
+        localStorage.setItem('rbp_feed_scope', value);
+      } catch {
+        // Stockage indisponible : le choix reste valable pour la session.
+      }
+    }
+    for (const button of tabEls) {
       button.classList.toggle('is-active', button.dataset.scope === value);
     }
+    reshuffleBtn.hidden = value !== 'random';
     reset();
+  }
+
+  if (!tag) {
+    get('/posts/tags?limit=10')
+      .then(({ tags }) => {
+        if (!tags?.length || !trends.isConnected) return;
+        trends.replaceChildren(
+          h('span', { class: 'tag-strip-label' }, icon('hash', 14), 'Tendances'),
+          ...tags.map(({ tag: trendTag, count }) =>
+            h(
+              'a',
+              { class: 'tag-chip', href: `#/tag/${encodeURIComponent(trendTag)}` },
+              `#${trendTag}`,
+              h('span', { class: 'tag-chip-count' }, formatCount(count))
+            )
+          )
+        );
+        trends.hidden = false;
+      })
+      .catch(() => {
+        // Les tendances sont un bonus : on ignore les erreurs.
+      });
   }
 
   const observer = new IntersectionObserver(
@@ -751,6 +946,27 @@ export async function feedView(root) {
   observer.observe(sentinel);
 
   await load(true);
+}
+
+export function feedView(root) {
+  return postsFeed(root, { title: 'Accueil' });
+}
+
+export function tagView(root, rawTag) {
+  const tag = normalizeTag(rawTag);
+  if (!tag) {
+    root.append(
+      viewHead('Hashtag', { back: true }),
+      emptyState({
+        iconName: 'hash',
+        title: 'Hashtag invalide',
+        text: 'Ce lien ne correspond à aucun thème.',
+        actions: [h('a', { class: 'btn-primary', href: '#/' }, 'Retour à l’accueil')],
+      })
+    );
+    return undefined;
+  }
+  return postsFeed(root, { title: `#${tag}`, back: true, tag });
 }
 
 /* ------------------------------------------------------------------ */
@@ -791,10 +1007,10 @@ function toggleReelsMuted() {
 function reelSlide(postRow) {
   const video = h('video', {
     class: 'reel-video',
-    src: postRow.media.url,
+    dataset: { src: postRow.media.url },
     loop: true,
     playsInline: true,
-    preload: 'metadata',
+    preload: 'none',
   });
   video.muted = reelsMuted;
   video.addEventListener('click', () => {
@@ -907,12 +1123,28 @@ function reelSlide(postRow) {
   );
 }
 
-export async function reelsView(root) {
+export async function reelsView(root, rawTag = null) {
   root.classList.add('view--reels');
+
+  const tag = rawTag ? normalizeTag(rawTag) : null;
+  if (rawTag && !tag) {
+    root.append(
+      viewHead('Hashtag', { back: true }),
+      emptyState({
+        iconName: 'hash',
+        title: 'Hashtag invalide',
+        text: 'Ce lien ne correspond à aucun thème.',
+        actions: [h('a', { class: 'btn-primary', href: '#/scroll' }, 'Voir tous les scrolls')],
+      })
+    );
+    return;
+  }
 
   let posts;
   try {
-    ({ posts } = await get('/posts/reels?limit=30'));
+    const limit = state.lite ? 12 : 30;
+    const query = `/posts/reels?limit=${limit}` + (tag ? `&tag=${encodeURIComponent(tag)}` : '');
+    ({ posts } = await get(query));
   } catch (error) {
     toast(error.message, 'error');
     posts = [];
@@ -920,18 +1152,23 @@ export async function reelsView(root) {
 
   if (!posts.length) {
     root.append(
-      viewHead('Scroll'),
+      viewHead(tag ? `#${tag}` : 'Scroll', { back: Boolean(tag) }),
       emptyState({
         iconName: 'video',
-        title: 'Aucune vidéo pour le moment',
-        text: 'Poste une vidéo et elle apparaîtra ici, dans le scroll vertical.',
+        title: tag ? `Aucune vidéo avec #${tag}` : 'Aucune vidéo pour le moment',
+        text: tag
+          ? 'Les vidéos de ce thème apparaîtront ici dès qu’elles seront publiées.'
+          : 'Poste une vidéo et elle apparaîtra ici, dans le scroll vertical.',
         actions: [
           h(
             'button',
             { class: 'btn-primary', type: 'button', onclick: () => openComposer() },
             'Poster une vidéo'
           ),
-        ],
+          tag
+            ? h('a', { class: 'btn-ghost', href: `#/tag/${encodeURIComponent(tag)}` }, 'Voir les posts')
+            : null,
+        ].filter(Boolean),
       })
     );
     return;
@@ -945,6 +1182,14 @@ export async function reelsView(root) {
     `Swipe pour découvrir · ${reelsMuted ? 'son coupé' : 'son activé'}`
   );
 
+  // Les vidéos ne sont chargées qu'à l'approche de l'écran, puis libérées
+  // quand on est loin : indispensable sur un appareil modeste.
+  const ensureSrc = (video) => {
+    if (!video.getAttribute('src') && video.dataset.src) {
+      video.src = video.dataset.src;
+    }
+  };
+
   const observer = new IntersectionObserver(
     (entries) => {
       if (!container.isConnected) {
@@ -954,20 +1199,34 @@ export async function reelsView(root) {
       for (const entry of entries) {
         const video = entry.target.querySelector('video');
         if (!video) continue;
-        if (entry.isIntersecting && entry.intersectionRatio > 0.55) {
-          video.muted = reelsMuted;
-          video.play().catch(() => {});
+
+        if (entry.isIntersecting) {
+          ensureSrc(video);
+          if (entry.intersectionRatio > 0.55) {
+            video.muted = reelsMuted;
+            video.play().catch(() => {});
+          } else {
+            video.pause();
+          }
         } else {
           video.pause();
+          if (video.getAttribute('src')) {
+            video.removeAttribute('src');
+            video.load();
+          }
         }
       }
     },
-    { threshold: [0, 0.55, 1] }
+    { root: container, rootMargin: '150% 0px', threshold: [0, 0.55, 1] }
   );
 
   function renderSlides() {
     observer.disconnect();
-    for (const video of container.querySelectorAll('video')) video.pause();
+    for (const video of container.querySelectorAll('video')) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    }
     container.replaceChildren(...posts.map(reelSlide));
     for (const slide of container.children) observer.observe(slide);
     container.scrollTop = 0;
@@ -994,7 +1253,28 @@ export async function reelsView(root) {
     h('span', null, 'Mélanger')
   );
 
-  root.append(viewHead('Scroll', { right: shuffleBtn }), container, hint);
+  const headActions = h('div', { class: 'row-end' });
+  if (tag) {
+    headActions.append(
+      h(
+        'a',
+        {
+          class: 'btn-ghost btn-sm',
+          href: `#/tag/${encodeURIComponent(tag)}`,
+          title: 'Voir les posts de ce thème',
+        },
+        icon('hash', 16),
+        h('span', null, 'Posts')
+      )
+    );
+  }
+  headActions.append(shuffleBtn);
+
+  root.append(
+    viewHead(tag ? `#${tag}` : 'Scroll', { back: Boolean(tag), right: headActions }),
+    container,
+    hint
+  );
   renderSlides();
 }
 

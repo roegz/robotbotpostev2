@@ -78,9 +78,20 @@ export function avatarEl(user, { size = 44, className = '' } = {}) {
 /* Texte enrichi                                                      */
 /* ------------------------------------------------------------------ */
 
+/** Normalise un hashtag : minuscules, sans accents, sans ponctuation. */
+export function normalizeTag(value) {
+  return String(value ?? '')
+    .slice(0, 100)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}_]/gu, '')
+    .slice(0, 30);
+}
+
 export function richText(text) {
   const fragment = document.createDocumentFragment();
-  const matcher = /(@[a-z0-9_]{3,20})|(#[a-z0-9_]{1,40})/gi;
+  const matcher = /(@[a-z0-9_]{3,20})|(#[\p{L}\p{N}_]{1,40})/giu;
   let cursor = 0;
   let match;
 
@@ -94,7 +105,16 @@ export function richText(text) {
         h('a', { class: 'mention', href: `#/u/${encodeURIComponent(username)}` }, match[1])
       );
     } else {
-      fragment.append(h('span', { class: 'hashtag' }, match[2]));
+      const tag = normalizeTag(match[2]);
+      fragment.append(
+        tag
+          ? h(
+              'a',
+              { class: 'hashtag', href: `#/tag/${encodeURIComponent(tag)}` },
+              match[2]
+            )
+          : document.createTextNode(match[2])
+      );
     }
     cursor = matcher.lastIndex;
   }

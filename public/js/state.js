@@ -1,3 +1,29 @@
+const FEED_SCOPES = ['friends', 'all', 'top', 'random'];
+
+function detectLiteMode() {
+  if (typeof navigator === 'undefined') return false;
+  const connection =
+    navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) return true;
+
+  const memory = Number(navigator.deviceMemory);
+  if (Number.isFinite(memory) && memory > 0 && memory <= 4) return true;
+
+  const cores = Number(navigator.hardwareConcurrency);
+  if (Number.isFinite(cores) && cores > 0 && cores <= 4) return true;
+
+  return false;
+}
+
+function storedFeedScope() {
+  try {
+    const value = localStorage.getItem('rbp_feed_scope');
+    return FEED_SCOPES.includes(value) ? value : 'friends';
+  } catch {
+    return 'friends';
+  }
+}
+
 export const state = {
   me: null,
   config: {
@@ -11,7 +37,10 @@ export const state = {
   },
   socket: null,
   unread: 0,
-  feedScope: localStorage.getItem('rbp_feed_scope') === 'all' ? 'all' : 'friends',
+  feedScope: storedFeedScope(),
+  // « Mode grille-pain » : appareils modestes, économie de données ou
+  // préférence système. Il réduit les effets et la taille des lots chargés.
+  lite: detectLiteMode(),
 };
 
 const bus = new EventTarget();

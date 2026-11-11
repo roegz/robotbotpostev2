@@ -685,7 +685,7 @@ textarea.field {
 .tabs {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 0.25rem;
   padding: 0.28rem;
   margin: 0.2rem 0 0.9rem;
@@ -695,11 +695,15 @@ textarea.field {
 }
 
 .tab {
-  padding: 0.55rem 0.75rem;
+  min-width: 0;
+  padding: 0.55rem 0.4rem;
   border-radius: 999px;
   color: var(--muted);
   font-weight: 650;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition:
     background 0.15s ease,
     color 0.15s ease,
@@ -790,6 +794,74 @@ textarea.field {
   flex-direction: column;
   gap: 0.8rem;
   overflow-anchor: none;
+}
+
+/* Le navigateur peut sauter le rendu des cartes hors écran : gros gain
+   de fluidité sur les appareils modestes. */
+@supports (content-visibility: auto) {
+  .post-list > .post {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 260px;
+  }
+}
+
+/* Bandeau des hashtags tendance ------------------------------------- */
+
+.tag-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.1rem 0 0.85rem;
+  padding-bottom: 0.15rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tag-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tag-strip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  margin-right: 0.1rem;
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(124, 92, 255, 0.12);
+  border: 1px solid rgba(124, 92, 255, 0.28);
+  color: #c3b8ff;
+  font-size: 0.8rem;
+  font-weight: 650;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.tag-chip:hover {
+  background: rgba(124, 92, 255, 0.22);
+  border-color: rgba(124, 92, 255, 0.45);
+}
+
+.tag-chip-count {
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--muted);
+  font-size: 0.68rem;
 }
 
 .sentinel {
@@ -1005,6 +1077,10 @@ textarea.field {
 .hashtag {
   color: #c3b8ff;
   font-weight: 600;
+}
+
+a.hashtag:hover {
+  text-decoration: underline;
 }
 
 .post-media {
@@ -3155,6 +3231,69 @@ video.post-media {
   .modal-body {
     padding-inline: 1rem;
   }
+}
+
+@media (max-width: 430px) {
+  .tab {
+    padding: 0.5rem 0.2rem;
+    font-size: 0.78rem;
+  }
+
+  .tag-strip {
+    margin-bottom: 0.7rem;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Mode « grille-pain » (appareil modeste / économie de données)      */
+/* ------------------------------------------------------------------ */
+
+html.lite body {
+  background: var(--bg);
+}
+
+html.lite * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html.lite .post,
+html.lite .post--detail {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+html.lite .view,
+html.lite .post,
+html.lite .composer-teaser,
+html.lite .tab,
+html.lite .btn-primary,
+html.lite .btn-ghost,
+html.lite .quick-btn,
+html.lite .reel-action,
+html.lite .tag-chip,
+html.lite .toast {
+  animation: none !important;
+  transition: none !important;
+}
+
+html.lite .btn-primary {
+  box-shadow: none !important;
+}
+
+html.lite .reel-shade {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, transparent 45%);
+}
+
+/* Les deux halos flous de la page de connexion coûtent très cher à peindre. */
+html.lite .auth-glow {
+  display: none;
+}
+
+html.lite .composer-teaser:hover,
+html.lite .quick-btn:hover,
+html.lite .reel-action:hover {
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

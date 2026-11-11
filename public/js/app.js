@@ -2,13 +2,16 @@ import { get, post } from './api.js';
 import { state, on, go, currentPath, setUnread, emit } from './state.js';
 import { h, avatarEl, toast, updateCountdowns, closeAllModals } from './ui.js';
 import { icon, brandMark } from './icons.js';
-import { feedView, reelsView, postDetailView, openComposer } from './posts.js';
+import { feedView, tagView, reelsView, postDetailView, openComposer } from './posts.js';
 import { profileView, friendsView } from './social.js';
 import { chatView } from './chat.js';
 import { renderAuth } from './authView.js';
 
 const appEl = document.getElementById('app');
 let lastRenderedPath = null;
+
+// Active le mode « grille-pain » (appareil modeste / économie de données).
+document.documentElement.classList.toggle('lite', state.lite);
 
 /* ------------------------------------------------------------------ */
 /* Coquille (sidebar + barre mobile)                                   */
@@ -56,7 +59,7 @@ function drawShell() {
 
   const section = !path
     ? 'home'
-    : path === 'scroll'
+    : path === 'scroll' || path.startsWith('scroll/tag/')
       ? 'reels'
       : path.startsWith('messages')
         ? 'chat'
@@ -188,6 +191,10 @@ function renderRoute() {
     result = feedView(view);
   } else if (path === 'scroll') {
     result = reelsView(view);
+  } else if (path.startsWith('scroll/tag/')) {
+    result = reelsView(view, decodeURIComponent(path.slice('scroll/tag/'.length)));
+  } else if (path.startsWith('tag/')) {
+    result = tagView(view, decodeURIComponent(path.slice('tag/'.length)));
   } else if (path === 'messages') {
     result = chatView(view, null);
   } else if (path.startsWith('messages/')) {

@@ -15,6 +15,38 @@ export const postsRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MEDIA_RE = /^\/uploads\/[a-f0-9-]+\.[a-z0-9]{2,5}$/i;
+const HASHTAG_RE = /#([\p{L}\p{N}_]{1,30})/gu;
+const MAX_TAGS_PER_POST = 10;
+
+/** Normalise un hashtag : minuscules, sans accents, sans ponctuation. */
+function normalizeTag(value) {
+  return String(value ?? '')
+    .slice(0, 100)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}_]/gu, '')
+    .slice(0, 30);
+}
+
+function extractTags(content) {
+  const tags = new Set();
+  for (const match of String(content ?? '').matchAll(HASHTAG_RE)) {
+    const tag = normalizeTag(match[1]);
+    if (tag) tags.add(tag);
+    if (tags.size >= MAX_TAGS_PER_POST) break;
+  }
+  return [...tags];
+}
+
+/** Clause SQL : le post courant OU son post d'origine porte ce tag. */
+function tagClause() {
+  return ` AND EXISTS (
+    SELECT 1 FROM post_tags pt
+    WHERE pt.tag = ? AND (pt.post_id = p.id OR pt.post_id = p.repost_of)
+  )`;
+}
+
 
 /**
  * Sélection commune. Les placeholders `?` sont, dans l'ordre :
@@ -136,6 +168,13 @@ postsRouter.get('/', requireAuth, async (req, res, next) => {
     const scope = ['friends', 'all', 'user'].includes(req.query.scope)
       ? req.query.scope
       : 'friends';
+    const sort = ['top', 'random'].includes(req.query.sort) ? req.query.sort : 'recent';
+
+    const rawTag = req.query.tag;
+    const tag = rawTag === undefined ? null : normalizeTag(rawTag);
+    if (rawTag !== undefined && !tag) {
+      return res.json({ posts: [], next: null });
+    }
 
     const params = [now, now, me, me];
     let where = 'p.expires_at > ?';
@@ -153,29 +192,76 @@ postsRouter.get('/', requireAuth, async (req, res, next) => {
       params.push(String(req.query.username ?? '').toLowerCase());
     }
 
-    if (req.query.before) {
+    if (tag) {
+      where += tagClause();
+      params.push(tag);
+    }
+
+    let offset = 0;
+    if (sort === 'recent' && req.query.before) {
       const before = String(req.query.before);
       const beforeId = String(req.query.before_id ?? '');
       where += ' AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?))';
       params.push(before, before, beforeId);
+    } else if (sort === 'top') {
+      offset = Math.max(0, Number(req.query.offset) || 0);
     }
 
+    const orderBy =
+      sort === 'random'
+        ? 'ORDER BY RANDOM()'
+        : sort === 'top'
+          ? 'ORDER BY p.like_count DESC, p.comment_count DESC, p.created_at DESC, p.id DESC'
+          : 'ORDER BY p.created_at DESC, p.id DESC';
+
     params.push(limit);
+    let sql = `${POST_SELECT} WHERE ${where} ${orderBy} LIMIT ?`;
+    if (sort === 'top') {
+      sql += ' OFFSET ?';
+      params.push(offset);
+    }
+
+    const rows = await db.all(sql, params);
+    const posts = rows.map((row) => mapPost(row, now));
+
+    let next = null;
+    if (sort !== 'random' && posts.length === limit) {
+      if (sort === 'top') {
+        next = { offset: offset + posts.length };
+      } else {
+        const last = posts.at(-1);
+        next = { before: last.created_at, before_id: last.id };
+      }
+    }
+
+    return res.json({ posts, next });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Hashtags tendance                                                   */
+/* ------------------------------------------------------------------ */
+
+postsRouter.get('/tags', requireAuth, async (req, res, next) => {
+  try {
+    const now = isoNow();
+    const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 12));
 
     const rows = await db.all(
-      `${POST_SELECT} WHERE ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`,
-      params
+      `SELECT t.tag AS tag, COUNT(*) AS n
+       FROM post_tags t
+       JOIN posts p ON p.id = t.post_id
+       WHERE p.expires_at > ?
+       GROUP BY t.tag
+       ORDER BY n DESC, t.tag ASC
+       LIMIT ?`,
+      [now, limit]
     );
 
-    const posts = rows.map((row) => mapPost(row, now));
-    const last = posts.at(-1);
-
     return res.json({
-      posts,
-      next:
-        posts.length === limit && last
-          ? { before: last.created_at, before_id: last.id }
-          : null,
+      tags: rows.map((row) => ({ tag: row.tag, count: Number(row.n ?? 0) })),
     });
   } catch (error) {
     next(error);
@@ -192,11 +278,22 @@ postsRouter.get('/reels', requireAuth, async (req, res, next) => {
     const now = isoNow();
     const limit = Math.min(30, Math.max(1, Number(req.query.limit) || 20));
 
+    const rawTag = req.query.tag;
+    const tag = rawTag === undefined ? null : normalizeTag(rawTag);
+    if (rawTag !== undefined && !tag) {
+      return res.json({ posts: [] });
+    }
+
     const params = [now, now, me, me, now];
     let where = `p.expires_at > ?
       AND p.media_type = 'video'
       AND p.media_url IS NOT NULL
       AND p.repost_of IS NULL`;
+
+    if (tag) {
+      where += tagClause();
+      params.push(tag);
+    }
 
     if (req.query.before) {
       const before = String(req.query.before);
@@ -284,6 +381,15 @@ postsRouter.post('/', requireAuth, async (req, res, next) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [id, me, content, mediaUrl, mediaType, repostOf, now, expiresAt]
     );
+
+    // Indexation des hashtags pour les pages de thème et les tendances.
+    const tags = extractTags(content);
+    for (const tag of tags) {
+      await db.run(
+        'INSERT INTO post_tags (post_id, tag) VALUES (?, ?) ON CONFLICT DO NOTHING',
+        [id, tag]
+      );
+    }
 
     const post = await fetchPost(id, me, now);
 
